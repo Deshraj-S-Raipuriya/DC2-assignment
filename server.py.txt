@@ -1,0 +1,79 @@
+# server.py
+# Simple file server for the shared chat file.
+# Usage: python server.py <port>
+# Example: python server.py 9000
+
+import socket
+import threading
+import json
+import sys
+import os
+from datetime import datetime
+
+HOST = '0.0.0.0'
+CHAT_FILE = "chat.txt"
+LOCK = threading.Lock()
+
+def ensure_file():
+    if not os.path.exists(CHAT_FILE):
+        with open(CHAT_FILE, "w") as f:
+            f.write("")
+
+def handle_connection(conn, addr):
+    try:
+        data = conn.recv(65536).decode()
+        if not data:
+            return
+        req = json.loads(data)
+        action = req.get("action")
+        if action == "VIEW":
+            with LOCK:
+                with open(CHAT_FILE, "r") as f:
+                    content = f.read()
+            resp = {"status": "OK", "content": content}
+            conn.sendall(json.dumps(resp).encode())
+        elif action == "POST":
+            # expected fields: user_id, text, client_ts (string)
+            user = req.get("user_id")
+            text = req.get("text")
+            client_ts = req.get("client_ts")
+            # record server receipt time too (for logs)
+            server_ts = datetime.now().strftime("%d %b %Y %I:%M:%S%p")
+            line = f"{client_ts} {user}: {text}\n"
+            with LOCK:
+                with open(CHAT_FILE, "a") as f:
+                    f.write(line)
+            resp = {"status": "OK", "server_ts": server_ts}
+            conn.sendall(json.dumps(resp).encode())
+        else:
+            conn.sendall(json.dumps({"status": "ERR", "message": "Unknown action"}).encode())
+    except Exception as e:
+        try:
+            conn.sendall(json.dumps({"status":"ERR","message":str(e)}).encode())
+        except:
+            pass
+    finally:
+        conn.close()
+
+def start_server(port):
+    ensure_file()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind((HOST, port))
+    s.listen(5)
+    print(f"[SERVER] Listening on {HOST}:{port}, chat file: {CHAT_FILE}")
+    try:
+        while True:
+            conn, addr = s.accept()
+            t = threading.Thread(target=handle_connection, args=(conn, addr), daemon=True)
+            t.start()
+    except KeyboardInterrupt:
+        print("[SERVER] Shutting down")
+    finally:
+        s.close()
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python server.py <port>")
+        sys.exit(1)
+    port = int(sys.argv[1])
+    start_server(port)
